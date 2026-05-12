@@ -687,6 +687,60 @@ describe("describeImageWithModel", () => {
     expect(completeMock).not.toHaveBeenCalled();
   });
 
+  it("fails with deadline exceeded when retry starts after budget is exhausted", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        input: ["text", "image"],
+        baseUrl: "https://api.openai.com/v1",
+      })),
+    });
+    completeMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            vi.setSystemTime(new Date("2026-01-01T00:00:00.030Z"));
+            resolve({
+              role: "assistant",
+              api: "openai-responses",
+              provider: "openai",
+              model: "gpt-5.4-mini",
+              stopReason: "stop",
+              timestamp: Date.now(),
+              content: [
+                {
+                  type: "thinking",
+                  thinking: "internal image reasoning",
+                  thinkingSignature: "reasoning_content",
+                },
+              ],
+            });
+          }, 1);
+        }),
+    );
+
+    const result = describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 25,
+    });
+
+    const assertion = expect(result).rejects.toThrow("image description deadline exceeded");
+    await vi.advanceTimersByTimeAsync(1);
+    await assertion;
+    expect(completeMock).toHaveBeenCalledTimes(1);
+  });
+
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");

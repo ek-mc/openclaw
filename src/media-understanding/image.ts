@@ -281,21 +281,27 @@ function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined, started
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return undefined;
   }
-  return Math.max(1, Math.floor(timeoutMs - (Date.now() - startedAtMs)));
+  const remainingMs = Math.floor(timeoutMs - (Date.now() - startedAtMs));
+  return remainingMs > 0 ? remainingMs : 0;
 }
 
 async function withImageDescriptionTimeout<T>(params: {
-  task: Promise<T>;
+  task: () => Promise<T>;
   timeoutMs: number | undefined;
   controller: AbortController;
 }): Promise<T> {
   if (params.timeoutMs === undefined) {
-    return await params.task;
+    return await params.task();
+  }
+  if (params.timeoutMs <= 0) {
+    params.controller.abort();
+    throw new Error("image description deadline exceeded");
   }
   let timeout: NodeJS.Timeout | undefined;
   try {
+    const taskPromise = params.task();
     return await Promise.race([
-      params.task,
+      taskPromise,
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           params.controller.abort();
@@ -324,7 +330,7 @@ async function describeImagesWithModelInternal(
     const resolved = await withImageDescriptionTimeout({
       controller,
       timeoutMs: resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs),
-      task: resolveImageRuntime(params),
+      task: () => resolveImageRuntime(params),
     });
     apiKey = resolved.apiKey;
     model = resolved.model;
@@ -371,13 +377,14 @@ async function describeImagesWithModelInternal(
     return await withImageDescriptionTimeout({
       controller,
       timeoutMs,
-      task: complete(model, context, {
-        apiKey,
-        maxTokens,
-        signal: controller.signal,
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        ...(payloadHandler ? { onPayload: payloadHandler } : {}),
-      }),
+      task: () =>
+        complete(model, context, {
+          apiKey,
+          maxTokens,
+          signal: controller.signal,
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          ...(payloadHandler ? { onPayload: payloadHandler } : {}),
+        }),
     });
   };
 
